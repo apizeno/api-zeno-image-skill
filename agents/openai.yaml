@@ -1,0 +1,4 @@
+interface:
+  display_name: "API-Zeno Image"
+  short_description: "Generate and edit images with API-Zeno"
+  default_prompt: "Use $api-zeno-image to generate or edit an image with API-Zeno."

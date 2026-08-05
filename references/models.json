@@ -1,0 +1,51 @@
+{
+  "source": "API-Zeno creator model migrations and production pricing snapshot",
+  "reviewed_at": "2026-08-05",
+  "default_model": "gpt-image-2",
+  "default_size": "1024x1024",
+  "resolutions": ["1k", "2k", "4k"],
+  "models": {
+    "gpt-image-2": {
+      "operations": ["generate", "edit", "variation"],
+      "qualities": ["auto", "low", "medium", "high"],
+      "default_quality": "auto",
+      "output_formats": ["png", "jpeg", "webp"],
+      "default_output_format": "png",
+      "max_n": 1
+    },
+    "gpt-image-2-4k": {
+      "operations": ["generate", "edit", "variation"],
+      "qualities": ["auto", "low", "medium", "high"],
+      "default_quality": "auto",
+      "output_formats": ["png", "jpeg", "webp"],
+      "default_output_format": "png",
+      "max_n": 1
+    },
+    "gemini-3.1-flash-image-1k": {
+      "operations": ["generate"],
+      "qualities": [],
+      "output_formats": [],
+      "max_n": 1
+    },
+    "gemini-3.1-flash-image-2k": {
+      "operations": ["generate"],
+      "qualities": [],
+      "output_formats": [],
+      "max_n": 1
+    },
+    "gemini-3.1-flash-image-4k": {
+      "operations": ["generate"],
+      "qualities": [],
+      "output_formats": [],
+      "max_n": 1
+    }
+  },
+  "sizes": [
+    "1024x1024", "832x1248", "1248x832", "880x1184", "1184x880",
+    "912x1152", "1152x912", "768x1360", "1360x768", "1568x672",
+    "2048x2048", "1680x2512", "2512x1680", "1776x2368", "2368x1776",
+    "1824x2288", "2288x1824", "1536x2736", "2736x1536", "3136x1344",
+    "2880x2880", "2352x3520", "3520x2352", "2480x3312", "3312x2480",
+    "2576x3216", "3216x2576", "2160x3840", "3840x2160", "3840x1632"
+  ]
+}
