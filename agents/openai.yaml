@@ -1,4 +1,4 @@
 interface:
-  display_name: "API-Zeno Image"
-  short_description: "Generate and edit images with API-Zeno"
-  default_prompt: "Use $api-zeno-image to generate or edit an image with API-Zeno."
+  display_name: "API-Zeno Media"
+  short_description: "Generate images and videos with API-Zeno"
+  default_prompt: "Use $api-zeno-image to generate an image or video with API-Zeno."

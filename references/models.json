@@ -1,11 +1,13 @@
 {
-  "source": "API-Zeno creator model migrations and production pricing snapshot",
-  "reviewed_at": "2026-08-05",
-  "default_model": "gpt-image-2",
+  "source": "API-Zeno public model catalog",
+  "reviewed_at": "2026-10-13",
+  "default_model": "gemini-3.1-flash-image-preview",
+  "default_video_model": "grok-imagine-video-1.5",
   "default_size": "1024x1024",
-  "resolutions": ["1k", "2k", "4k"],
+  "resolutions": ["1k", "2k", "4k", "480p", "720p", "1080p"],
   "models": {
     "gpt-image-2": {
+      "media": "image",
       "operations": ["generate", "edit", "variation"],
       "qualities": ["auto", "low", "medium", "high"],
       "default_quality": "auto",
@@ -14,6 +16,7 @@
       "max_n": 1
     },
     "gpt-image-2-4k": {
+      "media": "image",
       "operations": ["generate", "edit", "variation"],
       "qualities": ["auto", "low", "medium", "high"],
       "default_quality": "auto",
@@ -22,30 +25,60 @@
       "max_n": 1
     },
     "gemini-3.1-flash-image-1k": {
+      "media": "image",
       "operations": ["generate"],
       "qualities": [],
       "output_formats": [],
       "max_n": 1
     },
     "gemini-3.1-flash-image-2k": {
+      "media": "image",
       "operations": ["generate"],
       "qualities": [],
       "output_formats": [],
       "max_n": 1
     },
     "gemini-3.1-flash-image-4k": {
+      "media": "image",
       "operations": ["generate"],
       "qualities": [],
       "output_formats": [],
       "max_n": 1
+    },
+    "gemini-3-pro-image-preview": {
+      "media": "image",
+      "operations": ["generate"],
+      "qualities": [],
+      "output_formats": [],
+      "max_n": 1
+    },
+    "gemini-3.1-flash-image-preview": {
+      "media": "image",
+      "operations": ["generate"],
+      "qualities": [],
+      "output_formats": [],
+      "max_n": 1
+    },
+    "grok-imagine-video": {
+      "media": "video",
+      "operations": ["generate"],
+      "input_modes": ["text"],
+      "max_duration": 15
+    },
+    "grok-imagine-video-1.5": {
+      "media": "video",
+      "operations": ["generate"],
+      "input_modes": ["text", "image"],
+      "max_duration": 15
     }
   },
   "sizes": [
-    "1024x1024", "832x1248", "1248x832", "880x1184", "1184x880",
+    "512x512", "768x768", "1024x1024", "1536x1536", "2048x2048",
+    "832x1248", "1248x832", "880x1184", "1184x880",
     "912x1152", "1152x912", "768x1360", "1360x768", "1568x672",
-    "2048x2048", "1680x2512", "2512x1680", "1776x2368", "2368x1776",
+    "1680x2512", "2512x1680", "1776x2368", "2368x1776",
     "1824x2288", "2288x1824", "1536x2736", "2736x1536", "3136x1344",
-    "2880x2880", "2352x3520", "3520x2352", "2480x3312", "3312x2480",
+    "2352x3520", "3520x2352", "2480x3312", "3312x2480",
     "2576x3216", "3216x2576", "2160x3840", "3840x2160", "3840x1632"
   ]
 }
