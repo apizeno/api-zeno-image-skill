@@ -23,8 +23,10 @@ SPEC.loader.exec_module(CLIENT)
 
 class MockHandler(BaseHTTPRequestHandler):
     requests = []
+    get_requests = []
     status = 200
     response = {"data": [{"b64_json": base64.b64encode(b"image-bytes").decode()}]}
+    get_response = {"id": "task-123", "status": "completed", "video_url": "https://example.com/video.mp4"}
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
@@ -38,6 +40,20 @@ class MockHandler(BaseHTTPRequestHandler):
             }
         )
         payload = json.dumps(self.__class__.response).encode()
+        self.send_response(self.__class__.status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def do_GET(self):
+        self.__class__.get_requests.append(
+            {
+                "path": self.path,
+                "authorization": self.headers.get("Authorization"),
+            }
+        )
+        payload = json.dumps(self.__class__.get_response).encode()
         self.send_response(self.__class__.status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
@@ -58,10 +74,12 @@ class ApiZenoImageTests(unittest.TestCase):
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
         MockHandler.requests = []
+        MockHandler.get_requests = []
         MockHandler.status = 200
         MockHandler.response = {
             "data": [{"b64_json": base64.b64encode(b"image-bytes").decode()}]
         }
+        MockHandler.get_response = {"id": "task-123", "status": "completed", "video_url": "https://example.com/video.mp4"}
         self.env = mock.patch.dict(
             os.environ,
             {
@@ -211,6 +229,62 @@ class ApiZenoImageTests(unittest.TestCase):
         self.assertEqual(1, code)
         self.assertIn("non-public address", stderr)
         self.assertFalse(output.exists())
+
+    def test_video_submits_once_polls_and_saves_base64_result(self):
+        MockHandler.response = {"id": "task-123", "status": "queued"}
+        MockHandler.get_response = {
+            "id": "task-123",
+            "status": "completed",
+            "data": [{"b64_video": base64.b64encode(b"video-bytes").decode()}],
+        }
+        output = Path(self.temp.name) / "result.mp4"
+        code, stdout, stderr = self.run_main(
+            [
+                "video",
+                "--prompt",
+                "studio product motion",
+                "--model",
+                "grok-imagine-video-1.5",
+                "--duration",
+                "6",
+                "--aspect-ratio",
+                "16:9",
+                "--poll-interval",
+                "0.1",
+                "--output",
+                str(output),
+            ]
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertEqual(b"video-bytes", output.read_bytes())
+        self.assertEqual([str(output.resolve())], json.loads(stdout)["outputs"])
+        self.assertEqual(1, len(MockHandler.requests))
+        self.assertEqual(1, len(MockHandler.get_requests))
+        self.assertEqual("/v1/video/generations/task-123", MockHandler.get_requests[0]["path"])
+        payload = json.loads(MockHandler.requests[0]["body"])
+        self.assertEqual("grok-imagine-video-1.5", payload["model"])
+        self.assertEqual(6, payload["duration"])
+        self.assertEqual("16:9", payload["aspect_ratio"])
+
+    def test_video_rejects_image_input_for_text_only_model_before_request(self):
+        source = Path(self.temp.name) / "source.png"
+        source.write_bytes(b"\x89PNG\r\n\x1a\nlocal-image")
+        code, _, stderr = self.run_main(
+            [
+                "video",
+                "--prompt",
+                "animate",
+                "--model",
+                "grok-imagine-video",
+                "--image",
+                str(source),
+                "--output",
+                str(Path(self.temp.name) / "result.mp4"),
+            ]
+        )
+        self.assertEqual(1, code)
+        self.assertIn("does not support image-to-video", stderr)
+        self.assertEqual([], MockHandler.requests)
 
     def test_status_never_prints_key(self):
         code, stdout, stderr = self.run_main(["status"])

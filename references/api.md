@@ -23,6 +23,7 @@ api_zeno_image.py clear-key
 api_zeno_image.py generate --prompt TEXT [options]
 api_zeno_image.py edit --image FILE [--image FILE ...] --prompt TEXT [options]
 api_zeno_image.py variation --image FILE [options]
+api_zeno_image.py video --prompt TEXT --model MODEL --output FILE [options]
 ```
 
 Shared request options include `--model`, `--size`, `--resolution`, `--n`, `--response-format`, `--output-format`, `--output`, and `--timeout`. Generation and edit also accept `--quality`. The edit command accepts `--mask`. Only pass `--quality` or `--output-format` to models that advertise those capabilities in `models.json`.
@@ -47,3 +48,7 @@ After saving a key, review its API-Zeno model allowlist and quota. Use an IP all
 API-Zeno authentication failures can include `missing_api_key`, `key_disabled`, `key_expired`, `ip_not_allowed`, and `key_quota_exceeded`. Preserve the server's error code and request ID in user-facing reports.
 
 The CLI intentionally sends each invocation once. Do not wrap it in an automatic retry loop. Ask the user before retrying an unsuccessful request.
+
+## Video Tasks
+
+Video generation uses `POST /video/generations` and then polls `GET /video/generations/{task_id}` until a completed result is returned. The CLI accepts `--duration`, `--aspect-ratio`, `--resolution`, `--size`, `--image`, and `--image-url` when the selected upstream supports them. Set `--poll-timeout` to control the maximum wait; the default is 1,800 seconds and the maximum is 86,400 seconds. Video URLs are downloaded with a 500 MiB limit and saved to the required `--output` path.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Secure, dependency-free API-Zeno image client for the api-zeno-image skill."""
+"""Secure, dependency-free API-Zeno media client for the api-zeno-image skill."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -25,11 +26,15 @@ from typing import Any, Iterable
 
 
 DEFAULT_BASE_URL = "https://api-zeno.com/v1"
-DEFAULT_MODEL = "gpt-image-2"
+DEFAULT_MODEL = "gemini-3.1-flash-image-preview"
 DEFAULT_SIZE = "1024x1024"
 MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024
+MAX_VIDEO_BYTES = 500 * 1024 * 1024
 MAX_RESPONSE_BYTES = 70 * 1024 * 1024
 DEFAULT_TIMEOUT_SECONDS = 1000
+DEFAULT_VIDEO_POLL_INTERVAL = 5.0
+DEFAULT_VIDEO_POLL_TIMEOUT = 1800
+MAX_VIDEO_POLL_TIMEOUT = 24 * 60 * 60
 MODELS_PATH = Path(__file__).resolve().parent.parent / "references" / "models.json"
 
 
@@ -379,20 +384,27 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _request(endpoint: str, body: bytes, content_type: str, timeout: int) -> dict[str, Any]:
+def _request_method(
+    endpoint: str,
+    body: bytes | None,
+    content_type: str | None,
+    timeout: int,
+    method: str,
+) -> dict[str, Any]:
     key, _ = _api_key()
     url = f"{_base_url()}/{endpoint.lstrip('/')}"
     request = urllib.request.Request(
         url,
         data=body,
-        method="POST",
+        method=method,
         headers={
             "Authorization": f"Bearer {key}",
-            "Content-Type": content_type,
             "Accept": "application/json",
-            "User-Agent": "api-zeno-image-skill/1.0",
+            "User-Agent": "api-zeno-media-skill/1.1",
         },
     )
+    if content_type:
+        request.add_header("Content-Type", content_type)
     try:
         opener = urllib.request.build_opener(_NoRedirectHandler())
         with opener.open(request, timeout=timeout) as response:
@@ -423,6 +435,14 @@ def _request(endpoint: str, body: bytes, content_type: str, timeout: int) -> dic
     if not isinstance(value, dict):
         raise ImageSkillError("API-Zeno returned an unexpected response shape")
     return value
+
+
+def _request(endpoint: str, body: bytes, content_type: str, timeout: int) -> dict[str, Any]:
+    return _request_method(endpoint, body, content_type, timeout, "POST")
+
+
+def _get_request(endpoint: str, timeout: int) -> dict[str, Any]:
+    return _request_method(endpoint, None, None, timeout, "GET")
 
 
 def _safe_public_url(url: str) -> None:
@@ -458,20 +478,20 @@ class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def _download(url: str, timeout: int) -> bytes:
+def _download(url: str, timeout: int, *, max_bytes: int = MAX_DOWNLOAD_BYTES, media_name: str = "image") -> bytes:
     _safe_public_url(url)
     opener = urllib.request.build_opener(_SafeRedirectHandler())
-    request = urllib.request.Request(url, headers={"User-Agent": "api-zeno-image-skill/1.0"})
+    request = urllib.request.Request(url, headers={"User-Agent": "api-zeno-media-skill/1.1"})
     try:
         with opener.open(request, timeout=timeout) as response:
             length = response.headers.get("Content-Length")
-            if length and int(length) > MAX_DOWNLOAD_BYTES:
-                raise ImageSkillError("Image download exceeds the 50 MB limit")
-            data = response.read(MAX_DOWNLOAD_BYTES + 1)
+            if length and int(length) > max_bytes:
+                raise ImageSkillError(f"{media_name.capitalize()} download exceeds the {max_bytes // (1024 * 1024)} MiB limit")
+            data = response.read(max_bytes + 1)
     except urllib.error.URLError as exc:
-        raise ImageSkillError(f"Could not download image result: {exc.reason}") from exc
-    if len(data) > MAX_DOWNLOAD_BYTES:
-        raise ImageSkillError("Image download exceeds the 50 MB limit")
+        raise ImageSkillError(f"Could not download {media_name} result: {exc.reason}") from exc
+    if len(data) > max_bytes:
+        raise ImageSkillError(f"{media_name.capitalize()} download exceeds the {max_bytes // (1024 * 1024)} MiB limit")
     return data
 
 
@@ -606,6 +626,175 @@ def variation(args: argparse.Namespace) -> int:
     return 0
 
 
+def _video_model_info(model: str) -> dict[str, Any]:
+    catalog = _models()
+    model_info = catalog["models"].get(model)
+    if not isinstance(model_info, dict):
+        available = ", ".join(
+            sorted(name for name, info in catalog["models"].items() if isinstance(info, dict) and info.get("media") == "video")
+        )
+        raise ImageSkillError(f"Unknown video model '{model}'. Available video models: {available or 'none'}")
+    if model_info.get("media") != "video" or "generate" not in model_info.get("operations", []):
+        raise ImageSkillError(f"Model '{model}' is not a video generation model")
+    return model_info
+
+
+def _image_data_url(path: Path) -> str:
+    mime = _image_mime(path)
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:{mime};base64,{encoded}"
+
+
+def _video_payload(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any]]:
+    model = args.model or _models().get("default_video_model")
+    if not model:
+        raise ImageSkillError("A video model is required; pass --model")
+    info = _video_model_info(str(model))
+    payload: dict[str, Any] = {"model": str(model), "prompt": args.prompt}
+    for key in ("size", "resolution", "duration", "aspect_ratio"):
+        value = getattr(args, key, None)
+        if value is not None:
+            payload[key] = value
+    if args.image and args.image_url:
+        raise ImageSkillError("Use either --image or --image-url, not both")
+    if args.image:
+        payload["image_url"] = _image_data_url(Path(args.image).expanduser().resolve())
+    elif args.image_url:
+        _safe_public_url(args.image_url)
+        payload["image_url"] = args.image_url
+    allowed_inputs = info.get("input_modes", ["text"])
+    if "image_url" in payload and "image" not in allowed_inputs:
+        raise ImageSkillError(f"Video model '{model}' does not support image-to-video input")
+    poll_interval = float(args.poll_interval)
+    if poll_interval < 0.1 or poll_interval > 60:
+        raise ImageSkillError("Poll interval must be between 0.1 and 60 seconds")
+    poll_timeout = int(args.poll_timeout)
+    if poll_timeout < 1 or poll_timeout > MAX_VIDEO_POLL_TIMEOUT:
+        raise ImageSkillError(f"Poll timeout must be between 1 and {MAX_VIDEO_POLL_TIMEOUT} seconds")
+    timeout = args.timeout if args.timeout is not None else DEFAULT_TIMEOUT_SECONDS
+    if timeout < 1 or timeout > DEFAULT_TIMEOUT_SECONDS:
+        raise ImageSkillError(f"Timeout must be between 1 and {DEFAULT_TIMEOUT_SECONDS} seconds")
+    options = {
+        "model": str(model),
+        "size": args.size,
+        "resolution": args.resolution,
+        "duration": args.duration,
+        "aspect_ratio": args.aspect_ratio,
+        "image": str(Path(args.image).expanduser().resolve()) if args.image else None,
+        # Do not persist a possibly signed URL in the non-secret workflow state.
+        "image_url": None,
+        "poll_interval": poll_interval,
+        "poll_timeout": poll_timeout,
+        "timeout": timeout,
+    }
+    return payload, options
+
+
+def _nested_values(value: Any) -> Iterable[Any]:
+    if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            yield from _nested_values(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _nested_values(child)
+
+
+def _video_task_id(response: dict[str, Any]) -> str | None:
+    for value in _nested_values(response):
+        if not isinstance(value, dict):
+            continue
+        for key in ("task_id", "taskId", "id"):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+    return None
+
+
+def _video_status(response: dict[str, Any]) -> str | None:
+    for value in _nested_values(response):
+        if not isinstance(value, dict):
+            continue
+        for key in ("status", "state"):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip().lower()
+    return None
+
+
+def _video_result_bytes(response: dict[str, Any], timeout: int) -> bytes | None:
+    base64_keys = ("b64_json", "b64_video", "video_base64", "base64")
+    url_keys = ("video_url", "output_url", "download_url", "url")
+    for value in _nested_values(response):
+        if not isinstance(value, dict):
+            continue
+        for key in base64_keys:
+            encoded = value.get(key)
+            if isinstance(encoded, str) and encoded:
+                try:
+                    return base64.b64decode(encoded, validate=True)
+                except (binascii.Error, ValueError) as exc:
+                    raise ImageSkillError("API-Zeno returned invalid base64 video data") from exc
+        for key in url_keys:
+            url = value.get(key)
+            if isinstance(url, str) and url:
+                return _download(url, timeout, max_bytes=MAX_VIDEO_BYTES, media_name="video")
+    return None
+
+
+def _video_failure_message(response: dict[str, Any]) -> str:
+    for value in _nested_values(response):
+        if not isinstance(value, dict):
+            continue
+        for key in ("message", "error", "failure_reason", "failureReason"):
+            message = value.get(key)
+            if isinstance(message, str) and message.strip():
+                return message.strip()
+            if isinstance(message, dict):
+                nested = message.get("message")
+                if isinstance(nested, str) and nested.strip():
+                    return nested.strip()
+    return "API-Zeno video task failed"
+
+
+def _video_task_result(task_id: str, options: dict[str, Any]) -> bytes:
+    deadline = time.monotonic() + options["poll_timeout"]
+    while True:
+        response = _get_request(
+            f"video/generations/{urllib.parse.quote(task_id, safe='')}",
+            options["timeout"],
+        )
+        data = _video_result_bytes(response, options["timeout"])
+        if data is not None:
+            return data
+        status_value = _video_status(response)
+        if status_value in {"failed", "failure", "error", "cancelled", "canceled", "rejected"}:
+            raise ImageSkillError(_video_failure_message(response))
+        if time.monotonic() >= deadline:
+            raise ImageSkillError(f"Video task '{task_id}' did not finish within {options['poll_timeout']} seconds")
+        time.sleep(min(options["poll_interval"], max(0.1, deadline - time.monotonic())))
+
+
+def video(args: argparse.Namespace) -> int:
+    payload, options = _video_payload(args)
+    response = _json_request("video/generations", payload, options["timeout"])
+    result = _video_result_bytes(response, options["timeout"])
+    task_id = _video_task_id(response)
+    if result is None:
+        if not task_id:
+            raise ImageSkillError("API-Zeno video response contains neither a task ID nor a video result")
+        result = _video_task_result(task_id, options)
+    output = Path(args.output).expanduser().resolve()
+    if not output.suffix:
+        output = output.with_suffix(".mp4")
+    output = _available_path(output)
+    _atomic_write_bytes(output, result)
+    outputs = [str(output)]
+    print(json.dumps({"outputs": outputs, "task_id": task_id}, indent=2))
+    _save_state("video", options, outputs)
+    return 0
+
+
 def _add_shared_options(parser: argparse.ArgumentParser, include_quality: bool = True) -> None:
     parser.add_argument("--model", help="API-Zeno image model ID")
     parser.add_argument("--size", help="Output dimensions, for example 1024x1024")
@@ -636,7 +825,7 @@ def build_parser() -> argparse.ArgumentParser:
     status_parser = subparsers.add_parser("status", help="Show non-secret configuration and state")
     status_parser.set_defaults(handler=lambda _args: status())
 
-    models_parser = subparsers.add_parser("models", help="List supported image models")
+    models_parser = subparsers.add_parser("models", help="List supported image and video models")
     models_parser.set_defaults(handler=lambda _args: list_models())
 
     clear_parser = subparsers.add_parser("clear-key", help="Remove the locally saved API key")
@@ -658,6 +847,35 @@ def build_parser() -> argparse.ArgumentParser:
     variation_parser.add_argument("--image", required=True)
     _add_shared_options(variation_parser, include_quality=False)
     variation_parser.set_defaults(handler=variation)
+
+    video_parser = subparsers.add_parser("video", help="Generate a video and save the completed result")
+    video_parser.add_argument("--prompt", required=True)
+    video_parser.add_argument("--model", required=True, help="API-Zeno video model ID")
+    video_parser.add_argument("--image", help="Local image for image-to-video models")
+    video_parser.add_argument("--image-url", help="Public image URL for image-to-video models")
+    video_parser.add_argument("--size", help="Output dimensions when supported by the model")
+    video_parser.add_argument("--resolution", help="Output resolution, for example 720p or 1080p")
+    video_parser.add_argument("--duration", type=int, help="Video duration in seconds when supported")
+    video_parser.add_argument("--aspect-ratio", help="Aspect ratio, for example 16:9")
+    video_parser.add_argument("--output", required=True, help="Local output video path")
+    video_parser.add_argument(
+        "--poll-interval",
+        type=float,
+        default=DEFAULT_VIDEO_POLL_INTERVAL,
+        help="Seconds between task status requests",
+    )
+    video_parser.add_argument(
+        "--poll-timeout",
+        type=int,
+        default=DEFAULT_VIDEO_POLL_TIMEOUT,
+        help="Maximum seconds to wait for the task",
+    )
+    video_parser.add_argument(
+        "--timeout",
+        type=int,
+        help=f"HTTP timeout per request in seconds, maximum {DEFAULT_TIMEOUT_SECONDS}",
+    )
+    video_parser.set_defaults(handler=video)
     return parser
 
 
